@@ -79,13 +79,63 @@ pub mod fundingme_dapp {
         let status = &ctx.accounts.project.status;
 
         if *status == ProjectStatus::Active {
-            Ok(()) // TODO: implement withdraw to the donors and set project status to failed.
+            // Set status to Failed - this enables refunds
+            ctx.accounts.project.status = ProjectStatus::Failed;
+            
+            // Mark that refunds are available but haven't started yet
+            msg!("Project failed. Donators can now claim individual refunds.");
+            msg!("Total donators to refund: {}", ctx.accounts.project.donators.len());
+            msg!("Total amount to refund: {} lamports", ctx.accounts.project.balance);
+            
+            Ok(())
         } else if *status == ProjectStatus::TargetReached {
             // Set status to Success so it can be withdrawn later
             ctx.accounts.project.status = ProjectStatus::Success;
             Ok(())
         } else {
             err!(CustomError::InvalidProjectStatus)
+        }
+    }
+
+    pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
+        if ctx.accounts.project.status != ProjectStatus::Failed {
+            return err!(CustomError::InvalidProjectStatus);
+        }
+
+        // Get donator key and find their entry
+        let donator_key = ctx.accounts.donator.key();
+        let donators = &ctx.accounts.project.donators;
+        let donator_index_and_amount = donators.iter()
+            .enumerate()
+            .find(|(_, d)| d.user == donator_key)
+            .map(|(index, donator)| (index, donator.amount));
+        
+        if let Some((donator_index, donator_amount)) = donator_index_and_amount {
+            // Transfer lamports directly from project account to donator
+            // This uses account info manipulation instead of system instruction
+            let project_lamports = ctx.accounts.project.to_account_info().lamports();
+            
+            // Ensure project has enough lamports
+            require!(
+                project_lamports >= donator_amount,
+                CustomError::InvalidProjectStatus
+            );
+            
+            // Perform the transfer by manipulating account lamports directly
+            **ctx.accounts.project.to_account_info().try_borrow_mut_lamports()? -= donator_amount;
+            **ctx.accounts.donator.to_account_info().try_borrow_mut_lamports()? += donator_amount;
+            
+            // Update project state
+            let project = &mut ctx.accounts.project;
+            project.donators.remove(donator_index);
+            project.balance -= donator_amount;
+
+            msg!("Refunded {} lamports to {}", donator_amount, donator_key);
+            msg!("Remaining donators: {}", project.donators.len());
+            
+            Ok(())
+        } else {
+            err!(CustomError::UserNotAuthorized) // Donator not found in list
         }
     }
 
@@ -110,13 +160,27 @@ pub mod fundingme_dapp {
         Ok(())
     }
 
-    // Future function for refunding donators if project fails
-    // pub fn refund_donators(ctx: Context<RefundProject>) -> Result<()> {
-    //     // TODO: Implement refund logic for each donator in the vector
-    //     // This will iterate through ctx.accounts.project.donators 
-    //     // and transfer back their amounts
-    //     Ok(())
-    // }
+    pub fn close_failed_project(ctx: Context<RefundProject>) -> Result<()> {
+        if ctx.accounts.project.status != ProjectStatus::Failed {
+            return err!(CustomError::InvalidProjectStatus);
+        }
+
+        // Only project owner can close failed project
+        if ctx.accounts.user.key() != ctx.accounts.project.owner {
+            return err!(CustomError::UserNotAuthorized);
+        }
+
+        // Ensure all donators have been refunded
+        if !ctx.accounts.project.donators.is_empty() {
+            return err!(CustomError::InvalidProjectStatus); // Still has unreturned funds
+        }
+
+        // PDA account will be automatically closed due to the `close` constraint
+        // Any remaining lamports (rent exemption) will go to the project owner
+        
+        msg!("Failed project closed successfully. All donators have been refunded.");
+        Ok(())
+    }
 
 }
 
@@ -155,6 +219,36 @@ pub struct WithdrawProject<'info> {
         mut,
         close = user,
         constraint = project.owner == user.key(),
+        seeds = [b"project", project.owner.as_ref()],
+        bump = project.bump
+    )]
+    pub project: Account<'info, ProjectAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RefundProject<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        close = user,
+        constraint = project.owner == user.key(),
+        constraint = project.status == status::ProjectStatus::Failed,
+        seeds = [b"project", project.owner.as_ref()],
+        bump = project.bump
+    )]
+    pub project: Account<'info, ProjectAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimRefund<'info> {
+    #[account(mut)]
+    pub donator: Signer<'info>,
+    #[account(
+        mut,
+        constraint = project.status == status::ProjectStatus::Failed,
         seeds = [b"project", project.owner.as_ref()],
         bump = project.bump
     )]

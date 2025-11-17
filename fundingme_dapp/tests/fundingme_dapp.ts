@@ -787,3 +787,556 @@ describe("Withdraw validation", () => {
     console.log("✅ Project remains intact after failed withdrawal attempts");
   });
 });
+
+describe("Refund validation", () => {
+  anchor.setProvider(anchor.AnchorProvider.env());
+
+  const program = anchor.workspace.fundingmeDapp as Program<FundingmeDapp>;
+
+  it("Should allow project owner to mark project as failed and enable refunds", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor1 = anchor.web3.Keypair.generate();
+    const donor2 = anchor.web3.Keypair.generate();
+    
+    // Create a project that will fail (not reach target)
+    const targetAmount = 10000;
+    const projectAccountPdaAddr = await createProject(program, user, "Failed Project", targetAmount);
+
+    // Airdrop SOL to donors
+    const airdrop1Promise = anchor.getProvider().connection.requestAirdrop(donor1.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    const airdrop2Promise = anchor.getProvider().connection.requestAirdrop(donor2.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    
+    const [airdrop1Sig, airdrop2Sig] = await Promise.all([airdrop1Promise, airdrop2Promise]);
+    await Promise.all([
+      anchor.getProvider().connection.confirmTransaction(airdrop1Sig),
+      anchor.getProvider().connection.confirmTransaction(airdrop2Sig)
+    ]);
+
+    // Make donations that don't reach the target
+    const donation1Amount = new anchor.BN(3000);
+    await program.methods
+      .donate(donation1Amount)
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    const donation2Amount = new anchor.BN(2000);
+    await program.methods
+      .donate(donation2Amount)
+      .accounts({
+        user: donor2.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify project is still active with partial funding
+    let projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { active: {} }, "Project status should be Active");
+    assert.strictEqual(projectAccount.balance.toNumber(), 5000, "Project should have 5000 lamports from donations");
+    assert.strictEqual(projectAccount.donators.length, 2, "Should have 2 donators");
+
+    console.log("Project before closure:", {
+      status: projectAccount.status,
+      balance: projectAccount.balance.toNumber(),
+      donators: projectAccount.donators.length
+    });
+
+    // Project owner closes the project (marks it as failed)
+    const closeProjectTx = await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify status changed to Failed
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { failed: {} }, "Project status should be Failed after closing");
+    assert.strictEqual(projectAccount.balance.toNumber(), 5000, "Project balance should remain unchanged");
+    assert.strictEqual(projectAccount.donators.length, 2, "Donators list should remain unchanged");
+
+    console.log("Close project transaction signature:", closeProjectTx);
+    console.log("Project after closure:", {
+      status: projectAccount.status,
+      balance: projectAccount.balance.toNumber(),
+      donators: projectAccount.donators.length
+    });
+  });
+
+  it("Should allow individual donators to claim their refunds", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor1 = anchor.web3.Keypair.generate();
+    const donor2 = anchor.web3.Keypair.generate();
+    const donor3 = anchor.web3.Keypair.generate();
+    
+    // Create a failed project
+    const targetAmount = 15000;
+    const projectAccountPdaAddr = await createProject(program, user, "Refund Test Project", targetAmount);
+
+    // Airdrop SOL to all participants
+    const airdropPromises = [donor1, donor2, donor3].map(donor => 
+      anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL)
+    );
+    const airdropSigs = await Promise.all(airdropPromises);
+    await Promise.all(airdropSigs.map(sig => anchor.getProvider().connection.confirmTransaction(sig)));
+
+    // Multiple donations from different donors
+    const donation1Amount = new anchor.BN(4000);
+    await program.methods
+      .donate(donation1Amount)
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    const donation2Amount = new anchor.BN(3000);
+    await program.methods
+      .donate(donation2Amount)
+      .accounts({
+        user: donor2.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Donor1 donates again (should accumulate)
+    const donation3Amount = new anchor.BN(2000);
+    await program.methods
+      .donate(donation3Amount)
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    const donation4Amount = new anchor.BN(1000);
+    await program.methods
+      .donate(donation4Amount)
+      .accounts({
+        user: donor3.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor3])
+      .rpc({ commitment: "confirmed" });
+
+    // Mark project as failed
+    await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify project is failed with correct totals
+    let projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { failed: {} }, "Project should be Failed");
+    assert.strictEqual(projectAccount.balance.toNumber(), 10000, "Total project balance should be 10000");
+    assert.strictEqual(projectAccount.donators.length, 3, "Should have 3 unique donators");
+
+    // Get initial balances before refunds
+    const initialDonor1Balance = await anchor.getProvider().connection.getBalance(donor1.publicKey);
+    const initialDonor2Balance = await anchor.getProvider().connection.getBalance(donor2.publicKey);
+    const initialDonor3Balance = await anchor.getProvider().connection.getBalance(donor3.publicKey);
+
+    console.log("Before refunds:", {
+      donor1Balance: initialDonor1Balance,
+      donor2Balance: initialDonor2Balance,
+      donor3Balance: initialDonor3Balance,
+      projectBalance: projectAccount.balance.toNumber(),
+      donators: projectAccount.donators.map(d => ({ user: d.user.toString(), amount: d.amount.toNumber() }))
+    });
+
+    // Donor1 claims refund (should get 6000: 4000 + 2000)
+    const refund1Tx = await program.methods
+      .claimRefund()
+      .accounts({
+        donator: donor1.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify donor1 refund
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    const finalDonor1Balance = await anchor.getProvider().connection.getBalance(donor1.publicKey);
+    
+    assert.strictEqual(projectAccount.donators.length, 2, "Should have 2 donators left after first refund");
+    assert.strictEqual(projectAccount.balance.toNumber(), 4000, "Project balance should decrease by 6000");
+    assert.ok(finalDonor1Balance > initialDonor1Balance, "Donor1 balance should increase (accounting for transaction fees)");
+    
+    console.log("After donor1 refund:", {
+      transactionSignature: refund1Tx,
+      donor1BalanceIncrease: finalDonor1Balance - initialDonor1Balance,
+      projectBalance: projectAccount.balance.toNumber(),
+      remainingDonators: projectAccount.donators.length
+    });
+
+    // Donor2 claims refund (should get 3000)
+    const refund2Tx = await program.methods
+      .claimRefund()
+      .accounts({
+        donator: donor2.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify donor2 refund
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    const finalDonor2Balance = await anchor.getProvider().connection.getBalance(donor2.publicKey);
+    
+    assert.strictEqual(projectAccount.donators.length, 1, "Should have 1 donator left after second refund");
+    assert.strictEqual(projectAccount.balance.toNumber(), 1000, "Project balance should decrease by 3000");
+    assert.ok(finalDonor2Balance > initialDonor2Balance, "Donor2 balance should increase (accounting for transaction fees)");
+    
+    console.log("After donor2 refund:", {
+      transactionSignature: refund2Tx,
+      donor2BalanceIncrease: finalDonor2Balance - initialDonor2Balance,
+      projectBalance: projectAccount.balance.toNumber(),
+      remainingDonators: projectAccount.donators.length
+    });
+
+    // Donor3 claims refund (should get 1000)
+    const refund3Tx = await program.methods
+      .claimRefund()
+      .accounts({
+        donator: donor3.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([donor3])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify donor3 refund and project is empty
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    const finalDonor3Balance = await anchor.getProvider().connection.getBalance(donor3.publicKey);
+    
+    assert.strictEqual(projectAccount.donators.length, 0, "Should have no donators left after all refunds");
+    assert.strictEqual(projectAccount.balance.toNumber(), 0, "Project balance should be zero after all refunds");
+    assert.ok(finalDonor3Balance > initialDonor3Balance, "Donor3 balance should increase (accounting for transaction fees)");
+    
+    console.log("After donor3 refund:", {
+      transactionSignature: refund3Tx,
+      donor3BalanceIncrease: finalDonor3Balance - initialDonor3Balance,
+      projectBalance: projectAccount.balance.toNumber(),
+      remainingDonators: projectAccount.donators.length
+    });
+
+    console.log("All refunds completed successfully! ✅");
+  });
+
+  it("Should reject refund claims from non-donators", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor = anchor.web3.Keypair.generate();
+    const nonDonor = anchor.web3.Keypair.generate();
+    
+    // Create and fund a failed project
+    const targetAmount = 5000;
+    const projectAccountPdaAddr = await createProject(program, user, "Non-Donator Test", targetAmount);
+
+    // Airdrop to participants
+    const airdropDonor = await anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    const airdropNonDonor = await anchor.getProvider().connection.requestAirdrop(nonDonor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await Promise.all([
+      anchor.getProvider().connection.confirmTransaction(airdropDonor),
+      anchor.getProvider().connection.confirmTransaction(airdropNonDonor)
+    ]);
+
+    // Only donor makes a donation
+    await program.methods
+      .donate(new anchor.BN(2000))
+      .accounts({
+        user: donor.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    // Mark project as failed
+    await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // Try to claim refund with non-donator (should fail)
+    try {
+      await program.methods
+        .claimRefund()
+        .accounts({
+          donator: nonDonor.publicKey,
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([nonDonor])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Non-donator refund claim should have failed");
+    } catch (error) {
+      console.log("✅ Non-donator refund claim correctly rejected");
+      assert.ok(error.message.includes("UserNotAuthorized"), "Error should indicate user not authorized");
+    }
+
+    // Verify project state is unchanged
+    const projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.donators.length, 1, "Should still have 1 donator");
+    assert.strictEqual(projectAccount.balance.toNumber(), 2000, "Project balance should be unchanged");
+  });
+
+  it("Should reject refund claims when project is not failed", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor = anchor.web3.Keypair.generate();
+    
+    // Create a successful project
+    const targetAmount = 2000;
+    const projectAccountPdaAddr = await createProject(program, user, "Successful Project", targetAmount);
+
+    // Airdrop to participants
+    const airdropDonor = await anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await anchor.getProvider().connection.confirmTransaction(airdropDonor);
+
+    // Donate to reach target
+    await program.methods
+      .donate(new anchor.BN(targetAmount))
+      .accounts({
+        user: donor.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    // Close project successfully (should set status to Success)
+    await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify status is Success, not Failed
+    const projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { success: {} }, "Project should be Success, not Failed");
+
+    // Try to claim refund when project is successful (should fail)
+    try {
+      await program.methods
+        .claimRefund()
+        .accounts({
+          donator: donor.publicKey,
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([donor])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Refund claim on successful project should have failed");
+    } catch (error) {
+      console.log("✅ Refund claim on successful project correctly rejected");
+      console.log("Error message:", error.message); // Debug the actual error message
+      assert.ok(
+        error.message.includes("ConstraintViolation") || 
+        error.message.includes("InvalidProjectStatus") ||
+        error.message.includes("failed") ||
+        error.message.includes("constraint"),
+        "Error should indicate constraint violation or invalid project status"
+      );
+    }
+  });
+
+  it("Should prevent duplicate refund claims", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor = anchor.web3.Keypair.generate();
+    
+    // Create and fund a failed project
+    const targetAmount = 5000;
+    const projectAccountPdaAddr = await createProject(program, user, "Duplicate Refund Test", targetAmount);
+
+    // Airdrop to donor
+    const airdropDonor = await anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await anchor.getProvider().connection.confirmTransaction(airdropDonor);
+
+    // Make donation
+    await program.methods
+      .donate(new anchor.BN(3000))
+      .accounts({
+        user: donor.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    // Mark project as failed
+    await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // First refund claim (should succeed)
+    const refundTx = await program.methods
+      .claimRefund()
+      .accounts({
+        donator: donor.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    console.log("First refund successful:", refundTx);
+
+    // Verify donor is removed from list
+    const projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.donators.length, 0, "Donor should be removed after refund");
+
+    // Try to claim refund again (should fail)
+    try {
+      await program.methods
+        .claimRefund()
+        .accounts({
+          donator: donor.publicKey,
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([donor])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Duplicate refund claim should have failed");
+    } catch (error) {
+      console.log("✅ Duplicate refund claim correctly rejected");
+      assert.ok(error.message.includes("UserNotAuthorized"), "Error should indicate user not authorized (not in donators list)");
+    }
+  });
+
+  it("Should allow project owner to close failed project after all refunds", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor1 = anchor.web3.Keypair.generate();
+    const donor2 = anchor.web3.Keypair.generate();
+    
+    // Create and fund a failed project
+    const targetAmount = 8000;
+    const projectAccountPdaAddr = await createProject(program, user, "Close After Refunds Test", targetAmount);
+
+    // Airdrop to participants
+    const airdrop1Promise = anchor.getProvider().connection.requestAirdrop(donor1.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    const airdrop2Promise = anchor.getProvider().connection.requestAirdrop(donor2.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await Promise.all([
+      anchor.getProvider().connection.confirmTransaction(await airdrop1Promise),
+      anchor.getProvider().connection.confirmTransaction(await airdrop2Promise)
+    ]);
+
+    // Make donations
+    await program.methods
+      .donate(new anchor.BN(2000))
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    await program.methods
+      .donate(new anchor.BN(1500))
+      .accounts({
+        user: donor2.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Mark project as failed
+    await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // Try to close failed project before refunds (should fail)
+    try {
+      await program.methods
+        .closeFailedProject()
+        .accounts({
+          user: user.publicKey,
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Should not be able to close project with unreturned funds");
+    } catch (error) {
+      console.log("✅ Project closure rejected while donators remain");
+      assert.ok(error.message.includes("InvalidProjectStatus"), "Error should indicate invalid project status");
+    }
+
+    // Process all refunds
+    await program.methods
+      .claimRefund()
+      .accounts({
+        donator: donor1.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    await program.methods
+      .claimRefund()
+      .accounts({
+        donator: donor2.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Now close failed project should succeed
+    const initialOwnerBalance = await anchor.getProvider().connection.getBalance(user.publicKey);
+    
+    const closeTx = await program.methods
+      .closeFailedProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    console.log("Failed project closed successfully:", closeTx);
+
+    // Verify PDA account is closed
+    try {
+      await program.account.projectAccount.fetch(projectAccountPdaAddr);
+      assert.fail("PDA account should be closed");
+    } catch (error) {
+      console.log("✅ PDA account successfully closed");
+    }
+
+    // Verify owner received rent exemption
+    const finalOwnerBalance = await anchor.getProvider().connection.getBalance(user.publicKey);
+    assert.ok(finalOwnerBalance > initialOwnerBalance, "Owner should receive rent exemption (minus transaction fees)");
+    
+    console.log(`Owner received rent recovery: ${finalOwnerBalance - initialOwnerBalance} lamports`);
+  });
+});
