@@ -385,4 +385,143 @@ describe("Donate testings", () => {
     console.log(`Remaining needed: ${remainingAmount} lamports (${remainingPercentage.toFixed(2)}% to reach target)`);
     console.log("Final project status:", finalProjectAccount.status);
   });
+
+  it("Should track donators list with multiple donors and cumulative amounts", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor1 = anchor.web3.Keypair.generate();
+    const donor2 = anchor.web3.Keypair.generate();
+    const donor3 = anchor.web3.Keypair.generate();
+    
+    // Create a project with a moderate target (20000 lamports)
+    const targetAmount = 20000;
+    const projectAccountPdaAddr = await createProject(program, user, "Donators Tracking Project", targetAmount);
+
+    // Airdrop SOL to all donors
+    const airdropPromises = [donor1, donor2, donor3].map(donor => 
+      anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL)
+    );
+    
+    const airdropSigs = await Promise.all(airdropPromises);
+    await Promise.all(airdropSigs.map(sig => anchor.getProvider().connection.confirmTransaction(sig)));
+
+    // Get initial project state (should have empty donators list)
+    let projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.donators.length, 0, "Initial donators list should be empty");
+
+    // First donation from donor1: 3000 lamports
+    const donation1Amount = new anchor.BN(3000);
+    const tx1 = await program.methods
+      .donate(donation1Amount)
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    // Check after first donation
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.donators.length, 1, "Should have 1 donator after first donation");
+    assert.strictEqual(projectAccount.donators[0].user.toString(), donor1.publicKey.toString(), "First donator should be donor1");
+    assert.strictEqual(projectAccount.donators[0].amount.toNumber(), 3000, "First donator amount should be 3000");
+
+    console.log("First donation transaction signature:", tx1);
+    console.log("Donators after first donation:", projectAccount.donators.map(d => ({ 
+      user: d.user.toString(), 
+      amount: d.amount.toNumber() 
+    })));
+
+    // Second donation from donor2: 5000 lamports
+    const donation2Amount = new anchor.BN(5000);
+    const tx2 = await program.methods
+      .donate(donation2Amount)
+      .accounts({
+        user: donor2.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Check after second donation
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.donators.length, 2, "Should have 2 donators after second donation");
+    
+    // Find donor2 in the list
+    const donor2Entry = projectAccount.donators.find(d => d.user.toString() === donor2.publicKey.toString());
+    assert.ok(donor2Entry, "Donor2 should be in the donators list");
+    assert.strictEqual(donor2Entry.amount.toNumber(), 5000, "Donor2 amount should be 5000");
+
+    console.log("Second donation transaction signature:", tx2);
+    console.log("Donators after second donation:", projectAccount.donators.map(d => ({ 
+      user: d.user.toString(), 
+      amount: d.amount.toNumber() 
+    })));
+
+    // Third donation from donor1 again: 2000 lamports (should update existing entry)
+    const donation3Amount = new anchor.BN(2000);
+    const tx3 = await program.methods
+      .donate(donation3Amount)
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    // Check after third donation (donor1's second donation)
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.donators.length, 2, "Should still have 2 unique donators");
+    
+    // Find updated donor1 entry
+    const updatedDonor1Entry = projectAccount.donators.find(d => d.user.toString() === donor1.publicKey.toString());
+    assert.ok(updatedDonor1Entry, "Donor1 should still be in the donators list");
+    assert.strictEqual(updatedDonor1Entry.amount.toNumber(), 5000, "Donor1 total amount should be 5000 (3000 + 2000)");
+
+    console.log("Third donation transaction signature:", tx3);
+    console.log("Donators after third donation (donor1's cumulative):", projectAccount.donators.map(d => ({ 
+      user: d.user.toString(), 
+      amount: d.amount.toNumber() 
+    })));
+
+    // Fourth donation from donor3: 7000 lamports
+    const donation4Amount = new anchor.BN(7000);
+    const tx4 = await program.methods
+      .donate(donation4Amount)
+      .accounts({
+        user: donor3.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor3])
+      .rpc({ commitment: "confirmed" });
+
+    // Final verification
+    const finalProjectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(finalProjectAccount.donators.length, 3, "Should have 3 unique donators at the end");
+    
+    // Verify total balance matches sum of all donations
+    const expectedTotalBalance = 3000 + 5000 + 2000 + 7000; // 17000
+    assert.strictEqual(finalProjectAccount.balance.toNumber(), expectedTotalBalance, "Total project balance should match sum of all donations");
+    
+    // Verify individual donator amounts
+    const finalDonor1 = finalProjectAccount.donators.find(d => d.user.toString() === donor1.publicKey.toString());
+    const finalDonor2 = finalProjectAccount.donators.find(d => d.user.toString() === donor2.publicKey.toString());
+    const finalDonor3 = finalProjectAccount.donators.find(d => d.user.toString() === donor3.publicKey.toString());
+    
+    assert.strictEqual(finalDonor1.amount.toNumber(), 5000, "Donor1 final amount should be 5000");
+    assert.strictEqual(finalDonor2.amount.toNumber(), 5000, "Donor2 final amount should be 5000");
+    assert.strictEqual(finalDonor3.amount.toNumber(), 7000, "Donor3 final amount should be 7000");
+    
+    // Verify sum of individual amounts equals total balance
+    const sumOfDonatorAmounts = finalProjectAccount.donators.reduce((sum, donator) => sum + donator.amount.toNumber(), 0);
+    assert.strictEqual(sumOfDonatorAmounts, expectedTotalBalance, "Sum of individual donator amounts should equal total project balance");
+
+    console.log("Fourth donation transaction signature:", tx4);
+    console.log("Final donators list:", finalProjectAccount.donators.map(d => ({ 
+      user: d.user.toString(), 
+      amount: d.amount.toNumber() 
+    })));
+    console.log(`Total project balance: ${finalProjectAccount.balance.toNumber()} lamports`);
+    console.log(`Sum of individual donations: ${sumOfDonatorAmounts} lamports`);
+    console.log(`Number of unique donators: ${finalProjectAccount.donators.length}`);
+  });
 });

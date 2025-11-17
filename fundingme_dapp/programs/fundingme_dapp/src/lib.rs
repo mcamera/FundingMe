@@ -23,6 +23,7 @@ pub mod fundingme_dapp {
         project.financial_target = financial_target;
         project.balance = 0;
         project.status = ProjectStatus::Active;
+        project.donators = Vec::new();
         project.bump = ctx.bumps.project;
 
         msg!("Greetings from: {:?}", ctx.program_id);
@@ -50,6 +51,22 @@ pub mod fundingme_dapp {
         )?;
 
         (&mut ctx.accounts.project).balance += amount;
+        
+        // Add or update donator in the vector
+        let donator_key = ctx.accounts.user.key();
+        let donators = &mut ctx.accounts.project.donators;
+        
+        // Check if this user has already donated
+        if let Some(existing_donator) = donators.iter_mut().find(|d| d.user == donator_key) {
+            // Update existing donator's total amount
+            existing_donator.amount += amount;
+        } else {
+            // Add new donator
+            donators.push(Donator {
+                user: donator_key,
+                amount,
+            });
+        }
 
         if ctx.accounts.project.balance >= ctx.accounts.project.financial_target {
             ctx.accounts.project.status = ProjectStatus::TargetReached
@@ -69,6 +86,19 @@ pub mod fundingme_dapp {
             err!(CustomError::InvalidProjectStatus)
         }
     }
+
+    // Helper function to get donator count (can be called via view)
+    pub fn get_donator_count(ctx: Context<RunningProject>) -> Result<u64> {
+        Ok(ctx.accounts.project.donators.len() as u64)
+    }
+
+    // Future function for refunding donators if project fails
+    // pub fn refund_donators(ctx: Context<RefundProject>) -> Result<()> {
+    //     // TODO: Implement refund logic for each donator in the vector
+    //     // This will iterate through ctx.accounts.project.donators 
+    //     // and transfer back their amounts
+    //     Ok(())
+    // }
 
 }
 
@@ -106,5 +136,12 @@ pub struct ProjectAccount {
     financial_target: u64,
     balance: u64,
     status: ProjectStatus,
+    donators: Vec<Donator>,
     bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct Donator {
+    pub user: Pubkey,
+    pub amount: u64,
 }
