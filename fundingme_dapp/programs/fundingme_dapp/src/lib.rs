@@ -81,7 +81,9 @@ pub mod fundingme_dapp {
         if *status == ProjectStatus::Active {
             Ok(()) // TODO: implement withdraw to the donors and set project status to failed.
         } else if *status == ProjectStatus::TargetReached {
-            Ok(()) // TODO: implement total amount withdraw to the owner and set project status as success.
+            // Set status to Success so it can be withdrawn later
+            ctx.accounts.project.status = ProjectStatus::Success;
+            Ok(())
         } else {
             err!(CustomError::InvalidProjectStatus)
         }
@@ -90,6 +92,22 @@ pub mod fundingme_dapp {
     // Helper function to get donator count (can be called via view)
     pub fn get_donator_count(ctx: Context<RunningProject>) -> Result<u64> {
         Ok(ctx.accounts.project.donators.len() as u64)
+    }
+
+    pub fn withdraw(ctx: Context<WithdrawProject>) -> Result<()> {
+        if ctx.accounts.project.status != ProjectStatus::Success {
+            return err!(CustomError::ProjectWithdrawNotAvailable);
+        }
+
+        if ctx.accounts.user.key() != ctx.accounts.project.owner {
+            return err!(CustomError::UserNotAuthorized);
+        }
+
+        // The PDA account will be automatically closed and all lamports 
+        // (including both donations and rent exemption) will be transferred 
+        // to the project owner due to the `close` constraint in WithdrawProject
+
+        Ok(())
     }
 
     // Future function for refunding donators if project fails
@@ -125,6 +143,21 @@ pub struct RunningProject<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(mut)]
+    pub project: Account<'info, ProjectAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawProject<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(
+        mut,
+        close = user,
+        constraint = project.owner == user.key(),
+        seeds = [b"project", project.owner.as_ref()],
+        bump = project.bump
+    )]
     pub project: Account<'info, ProjectAccount>,
     pub system_program: Program<'info, System>,
 }

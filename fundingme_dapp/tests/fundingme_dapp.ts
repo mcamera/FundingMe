@@ -525,3 +525,265 @@ describe("Donate testings", () => {
     console.log(`Number of unique donators: ${finalProjectAccount.donators.length}`);
   });
 });
+
+describe("Withdraw validation", () => {
+  anchor.setProvider(anchor.AnchorProvider.env());
+
+  const program = anchor.workspace.fundingmeDapp as Program<FundingmeDapp>;
+
+  it("Should allow project owner to withdraw funds and close PDA account", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor1 = anchor.web3.Keypair.generate();
+    const donor2 = anchor.web3.Keypair.generate();
+    
+    // Create a project with exact target for clean testing (5000 lamports)
+    const targetAmount = 5000;
+    const projectAccountPdaAddr = await createProject(program, user, "Withdraw Test Project", targetAmount);
+
+    // Airdrop SOL to donors
+    const airdrop1Promise = anchor.getProvider().connection.requestAirdrop(donor1.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    const airdrop2Promise = anchor.getProvider().connection.requestAirdrop(donor2.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    
+    const [airdrop1Sig, airdrop2Sig] = await Promise.all([airdrop1Promise, airdrop2Promise]);
+    await Promise.all([
+      anchor.getProvider().connection.confirmTransaction(airdrop1Sig),
+      anchor.getProvider().connection.confirmTransaction(airdrop2Sig)
+    ]);
+
+    // Get initial owner balance
+    const initialOwnerBalance = await anchor.getProvider().connection.getBalance(user.publicKey);
+
+    // Donations to reach exact target
+    const donation1Amount = new anchor.BN(2000);
+    const donation1Tx = await program.methods
+      .donate(donation1Amount)
+      .accounts({
+        user: donor1.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor1])
+      .rpc({ commitment: "confirmed" });
+
+    const donation2Amount = new anchor.BN(3000);
+    const donation2Tx = await program.methods
+      .donate(donation2Amount)
+      .accounts({
+        user: donor2.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor2])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify project reached target
+    let projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(projectAccount.balance.toNumber(), targetAmount, "Project should have reached exact target");
+    assert.deepStrictEqual(projectAccount.status, { targetReached: {} }, "Project status should be TargetReached");
+
+    console.log("Donation 1 transaction signature:", donation1Tx);
+    console.log("Donation 2 transaction signature:", donation2Tx);
+    console.log(`Project balance after donations: ${projectAccount.balance.toNumber()} lamports`);
+    console.log("Project status before close:", projectAccount.status);
+
+    // Close the project to set status to Success
+    const closeProjectTx = await program.methods
+      .closeProject()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify status changed to Success
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { success: {} }, "Project status should be Success after closing");
+
+    console.log("Close project transaction signature:", closeProjectTx);
+    console.log("Project status after close:", projectAccount.status);
+
+    // Get PDA account balance before withdrawal (includes donations + rent)
+    const pdaAccountInfo = await anchor.getProvider().connection.getAccountInfo(projectAccountPdaAddr);
+    const pdaBalanceBeforeWithdraw = pdaAccountInfo.lamports;
+    console.log(`PDA account balance before withdraw: ${pdaBalanceBeforeWithdraw} lamports`);
+
+    // Attempt withdrawal by project owner
+    const withdrawTx = await program.methods
+      .withdraw()
+      .accounts({
+        user: user.publicKey,
+        project: projectAccountPdaAddr,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([user])
+      .rpc({ commitment: "confirmed" });
+
+    console.log("Withdraw transaction signature:", withdrawTx);
+
+    // Verify PDA account is closed (should throw error when fetching)
+    try {
+      await program.account.projectAccount.fetch(projectAccountPdaAddr);
+      assert.fail("PDA account should be closed after withdrawal");
+    } catch (error) {
+      console.log("✅ PDA account successfully closed - fetch failed as expected");
+    }
+
+    // Verify PDA account info is null (account deleted)
+    const closedPdaAccountInfo = await anchor.getProvider().connection.getAccountInfo(projectAccountPdaAddr);
+    assert.strictEqual(closedPdaAccountInfo, null, "PDA account should be completely deleted");
+    console.log("✅ PDA account completely deleted from blockchain");
+
+    // Verify owner received funds
+    const finalOwnerBalance = await anchor.getProvider().connection.getBalance(user.publicKey);
+    const balanceIncrease = finalOwnerBalance - initialOwnerBalance;
+    
+    // Owner should receive both donation amount and rent exemption (minus transaction fees)
+    assert.ok(balanceIncrease > targetAmount, "Owner balance should increase by at least the donation amount");
+    console.log(`Owner balance increase: ${balanceIncrease} lamports`);
+    console.log(`Expected minimum increase: ${targetAmount} lamports (donations only)`);
+    console.log(`Additional received: ${balanceIncrease - targetAmount} lamports (rent recovery minus fees)`);
+  });
+
+  it("Should reject unauthorized withdrawal attempts", async () => {
+    const projectOwner = anchor.web3.Keypair.generate();
+    const unauthorizedUser = anchor.web3.Keypair.generate();
+    const donor = anchor.web3.Keypair.generate();
+    
+    // Create a project
+    const targetAmount = 2000;
+    const projectAccountPdaAddr = await createProject(program, projectOwner, "Unauthorized Test Project", targetAmount);
+    
+    // Airdrop SOL to unauthorized user and donor
+    const airdropUnauth = await anchor.getProvider().connection.requestAirdrop(unauthorizedUser.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    const airdropDonor = await anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await Promise.all([
+      anchor.getProvider().connection.confirmTransaction(airdropUnauth),
+      anchor.getProvider().connection.confirmTransaction(airdropDonor)
+    ]);
+    
+    // Fund the project to reach target
+    await program.methods
+      .donate(new anchor.BN(targetAmount))
+      .accounts({
+        user: donor.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    // Close project (by owner)
+    await program.methods
+      .closeProject()
+      .accounts({
+        user: projectOwner.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([projectOwner])
+      .rpc({ commitment: "confirmed" });
+
+    // Try to withdraw with unauthorized user (should fail)
+    try {
+      await program.methods
+        .withdraw()
+        .accounts({
+          user: unauthorizedUser.publicKey, // Wrong user!
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([unauthorizedUser])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Unauthorized withdrawal should have failed");
+    } catch (error) {
+      console.log("✅ Unauthorized withdrawal correctly rejected");
+      assert.ok(error.message.includes("UserNotAuthorized") || error.message.includes("constraint"), "Error should indicate unauthorized access");
+    }
+
+    // Verify project still exists and hasn't been closed by unauthorized attempt
+    const projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { success: {} }, "Project status should still be Success");
+    assert.strictEqual(projectAccount.balance.toNumber(), targetAmount, "Project balance should be unchanged");
+    console.log("✅ Project remains intact after failed unauthorized withdrawal");
+  });
+
+  it("Should reject withdrawal when project status is not Success", async () => {
+    const user = anchor.web3.Keypair.generate();
+    const donor = anchor.web3.Keypair.generate();
+    
+    // Create a project that won't reach target
+    const targetAmount = 10000;
+    const projectAccountPdaAddr = await createProject(program, user, "Partial Funding Project", targetAmount);
+    
+    // Airdrop SOL to donor
+    const airdropDonor = await anchor.getProvider().connection.requestAirdrop(donor.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+    await anchor.getProvider().connection.confirmTransaction(airdropDonor);
+    
+    // Make a donation that doesn't reach target
+    const partialAmount = 5000; // Only half the target
+    await program.methods
+      .donate(new anchor.BN(partialAmount))
+      .accounts({
+        user: donor.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify project status is Active (not Success)
+    let projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { active: {} }, "Project status should be Active (target not reached)");
+
+    // Try to withdraw when project is not successful (should fail)
+    try {
+      await program.methods
+        .withdraw()
+        .accounts({
+          user: user.publicKey,
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Withdrawal should have failed for non-successful project");
+    } catch (error) {
+      console.log("✅ Withdrawal correctly rejected for non-successful project");
+      assert.ok(error.message.includes("ProjectWithdrawNotAvailable"), "Error should indicate project not available for withdrawal");
+    }
+
+    // Test with TargetReached status (before calling closeProject)
+    // First, complete the funding
+    await program.methods
+      .donate(new anchor.BN(targetAmount - partialAmount))
+      .accounts({
+        user: donor.publicKey,
+        project: projectAccountPdaAddr,
+      })
+      .signers([donor])
+      .rpc({ commitment: "confirmed" });
+
+    // Verify status is now TargetReached
+    projectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.deepStrictEqual(projectAccount.status, { targetReached: {} }, "Project status should be TargetReached");
+
+    // Try to withdraw when status is TargetReached (should fail)
+    try {
+      await program.methods
+        .withdraw()
+        .accounts({
+          user: user.publicKey,
+          project: projectAccountPdaAddr,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc({ commitment: "confirmed" });
+      assert.fail("Withdrawal should have failed for TargetReached status");
+    } catch (error) {
+      console.log("✅ Withdrawal correctly rejected for TargetReached status");
+      assert.ok(error.message.includes("ProjectWithdrawNotAvailable"), "Error should indicate project not available for withdrawal");
+    }
+
+    // Verify project data is unchanged after failed withdrawal attempts
+    const finalProjectAccount = await program.account.projectAccount.fetch(projectAccountPdaAddr);
+    assert.strictEqual(finalProjectAccount.balance.toNumber(), targetAmount, "Project balance should be unchanged");
+    assert.deepStrictEqual(finalProjectAccount.status, { targetReached: {} }, "Project status should still be TargetReached");
+    console.log("✅ Project remains intact after failed withdrawal attempts");
+  });
+});
