@@ -1,6 +1,6 @@
 # Project Description
 
-**Deployed Frontend URL:** [TODO]
+**Deployed Frontend URL:** [https://funding-me-rho.vercel.app/](https://funding-me-rho.vercel.app/)
 
 **Solana Program ID:** `DmcSC8vFAoLr756aDoqkV13S6kosdHHNuziRezhCcKUi`
 
@@ -20,14 +20,16 @@ A decentralized crowdfunding platform built on Solana that enables users to crea
 - **Authorization Controls**: Robust permission system ensuring only authorized operations
 
 ### How to Use the dApp
-1. **Connect Wallet** - Connect your Solana wallet to interact with the platform
-2. **Create Project** - Initialize a new crowdfunding project with your desired name and financial target
-3. **Accept Donations** - Share your project for others to contribute SOL towards your goal
-4. **Monitor Progress** - Track donations, view donator list, and monitor progress towards financial target
-5. **Complete Project** - Once target is reached, close project to enable fund withdrawal
-6. **Withdraw Funds** - Successfully funded projects can withdraw all collected donations
-7. **Handle Failures** - If project fails, mark as failed to enable individual refund claims
-8. **Process Refunds** - Donators can individually claim refunds from failed projects
+1. **Connect as Project Owner** - Connect your Solana wallet to the Solana DevNet to interact with the platform as a Project Owner.
+2. **Create a New Project** - Set up a new crowdfunding project with your desired name and financial target, then click 'Create Project'.
+3. **Connect as Donator** - Connect a different Solana wallet to the Solana DevNet to interact with the platform as a Donator.
+4. **Make Donations** - Enter the project owner's Solana address in the search field and click 'Search'. The project information will appear below. Enter a donation amount and click 'Donate'.
+5. **Monitor Progress** - Reconnect with the project owner wallet to see new donations reflected in the project information.
+6. **Close a Successful Project** - Once the target is reached, click 'Close Project' to mark the project as successful and enable fund withdrawal.
+7. **Withdraw Funds** - Click the 'Withdraw Funds' button to transfer all collected donations to your wallet. The project and its Solana PDA account will be deleted.
+8. **Handle Project Failures** - If the project doesn't reach its target, click 'Close Project' to mark it as failed and enable individual refunds for all donators.
+9. **Process Refunds** - Reconnect with the donator wallet, search for the project using the owner's address, then click 'Claim Your Refund' to recover your donations. The amount will be automatically deposited into your wallet.
+10. **Close a Failed Project** - Reconnect with the project owner wallet and click 'Close Failed Project'. All remaining rent from the Solana account will be refunded to your wallet, and the Solana PDA account will be deleted.
 
 ## Program Architecture
 The funding dApp uses a sophisticated architecture with comprehensive state management, multi-user support, and complete lifecycle handling. The program leverages Program Derived Addresses for deterministic project accounts and implements a donation tracking system with individual refund capabilities.

@@ -1,95 +1,131 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/TzDKD5h9)
-![School of Solana](https://github.com/Ackee-Blockchain/school-of-solana/blob/master/.banner/banner.png?raw=true)
+# FundingMe dApp
 
-## 📚Solana Program
-We are about halfway through the course, and you already have some experience with programming on Solana. It is time to create something on your own! You will be building a dApp that will serve as the culmination of everything you have learned so far. Feel free to implement whatever comes to your mind, (as long as it passes the requirements).
+A decentralized crowdfunding platform built on Solana that enables users to create funding projects, accept donations from multiple contributors, and manage the complete funding lifecycle with transparent tracking and secure fund management.
 
-**This does not mean that the School of Solana is coming to an end just yet!** There are still several exciting lectures ahead, as well as one security related task.
+**🚀 Live Demo:** [https://funding-me-rho.vercel.app/](https://funding-me-rho.vercel.app/)  
+**📋 Solana Program ID:** `DmcSC8vFAoLr756aDoqkV13S6kosdHHNuziRezhCcKUi`
 
-### Task details
-This task consists of two parts:
-1. **Core of your dApp**
-    - A deployed Solana program.
-2. **Frontend**
-    - A simple frontend to interact with the dApp.
+## 🌟 Features
 
-### Requirements
-- An Anchor program deployed on **Devnet** or **Mainnet**.
-- The Anchor program must use a PDA (Program Derived Address).
-- At least one TypeScript **test** for each Anchor program instruction. These tests should cover both **happy** and **unhappy** (intentional error-triggering) scenarios.
-- A simple **frontend** deployed using your preferred provider (for more info, check below).
-- A filled out **PROJECT_DESCRIPTION.md** file.
+- **Project Creation**: Initialize crowdfunding projects with custom names and financial targets
+- **Multi-Donor Support**: Accept donations from multiple contributors with automatic tracking
+- **Status Management**: Automatic progression through Active → TargetReached → Success/Failed states
+- **Secure Withdrawals**: Project owners can withdraw funds only after reaching success status
+- **Complete Refund System**: Individual donators can claim refunds from failed projects
+- **Authorization Controls**: Robust permission system ensuring only authorized operations
 
-### Ideas
-We highly recommend starting with something simple. Take time to think through your project and work on it in iterations. Do not try to implement everything at once!
+## 🏗 Architecture
 
-Below is a list of few ideas to get you started:
-- **Social app**
-    - Instagram
-    - Giphy
-    - Friendtech
-    - Spotify
-- **Blog**
-- **Voting** ([D21 - Janeček method](https://www.ih21.org/en/guidelines))
-- **DeFi**
-    - Raffles
-    - Escrow
-    - Tipping
-    - Lending ([Save Documentation](https://docs.save.finance/))
-    - Liquid Staking ([Marinade Documentation](https://docs.marinade.finance/))
-    - Data Query with Pyth ([Pyth Documentation](https://docs.pyth.network/price-feeds))
-    - AMM ([Raydium Documentation](https://raydium.gitbook.io/raydium/))
-- **Gaming**
-    - Browser Game ([Gaming on Solana](https://solanacookbook.com/gaming/nfts-in-games.html#nfts-in-games))
+### Program Structure
+- **Solana Program**: Rust/Anchor backend deployed on DevNet
+- **Next.js Frontend**: TypeScript React application with wallet integration
+- **PDA System**: Program Derived Addresses for deterministic project accounts
 
-### Deadline
-The deadline for this task is **Wednesday, November 19th, at 23:59 UTC**.
->[!CAUTION]
->Note that we will not accept submissions after the deadline.
+### Key Components
+- **Project PDA**: `["project", owner_pubkey]` - unique project account per owner
+- **Account Management**: Complete lifecycle with rent recovery
+- **Status Tracking**: Automatic state transitions based on funding progress
 
-### Submission
-There are two folders, one for the Anchor project, and one for the frontend. Push your changes to the **main** branch of **this** repository.
+## 🚀 Quick Start
 
->[!IMPORTANT]
->It is essential that you fill out the `PROJECT_DESCRIPTION.md` template completely and accurately. This document will be used by AI for the initial evaluation, so provide detailed information about your project, including working links, clear descriptions, and technical implementation details.
+### Prerequisites
+- Node.js 18+
+- Rust and Anchor CLI (for program development)
+- Solana CLI configured for DevNet
+- Solana wallet with DevNet SOL
 
->[!NOTE]
->Your submission repository is public. Feel free to share the link to showcase your work!
+### Frontend Setup
+```bash
+cd fundingme_frontend
+npm install
+npm run dev
+```
 
-### Evaluation
-The evaluation process is based on the **requirements**. If you meet the requirements, you pass the task!
+### Program Development
+```bash
+cd fundingme_dapp
+yarn install
+anchor build
+anchor test
+anchor deploy --provider.cluster devnet
+```
 
->[!NOTE]
->The first round of evaluations will be conducted by AI to verify requirements before manual review. AI can make mistakes. If you believe you fulfilled all requirements but weren't graded correctly, please create a support ticket and we will resolve the issue.
+## 📱 How to Use
 
->[!CAUTION]
->We expect original work that demonstrates your understanding and creativity. While you may draw inspiration from examples covered in lessons and tasks, **direct copying is not acceptable**. If you choose to build upon an example from the School of Solana materials, you must significantly expand it with additional features, instructions, and functionality to showcase your learning progress. 
+1. **Connect Wallet**: Connect your Solana wallet to DevNet
+2. **Create Project**: Set up a crowdfunding project with name and financial target
+3. **Share Project**: Share your wallet address for others to find and donate to your project
+4. **Monitor Progress**: Track donations and funding progress in real-time
+5. **Complete Project**: Withdraw funds (successful) or enable refunds (failed)
 
-### Example Workflow
-Let's say you are going to implement the Twitter dApp as the Solana Program. Here's how the steps could look:
 
-**1.** Implement Twitter dApp using the Anchor framework.
+## 📱 How to Use (step-by-step)
 
-**2.** Test the Twitter dApp using the Anchor framework.
+1. **Connect as Project Owner** - Connect your Solana wallet to the Solana DevNet to interact with the platform as a Project Owner.
+2. **Create a New Project** - Set up a new crowdfunding project with your desired name and financial target, then click 'Create Project'.
+3. **Connect as Donator** - Connect a different Solana wallet to the Solana DevNet to interact with the platform as a Donator.
+4. **Make Donations** - Enter the project owner's Solana address in the search field and click 'Search'. The project information will appear below. Enter a donation amount and click 'Donate'.
+5. **Monitor Progress** - Reconnect with the project owner wallet to see new donations reflected in the project information.
+6. **Close a Successful Project** - Once the target is reached, click 'Close Project' to mark the project as successful and enable fund withdrawal.
+7. **Withdraw Funds** - Click the 'Withdraw Funds' button to transfer all collected donations to your wallet. The project and its Solana PDA account will be deleted.
+8. **Handle Project Failures** - If the project doesn't reach its target, click 'Close Project' to mark it as failed and enable individual refunds for all donators.
+9. **Process Refunds** - Reconnect with the donator wallet, search for the project using the owner's address, then click 'Claim Your Refund' to recover your donations. The amount will be automatically deposited into your wallet.
+10. **Close a Failed Project** - Reconnect with the project owner wallet and click 'Close Failed Project'. All remaining rent from the Solana account will be refunded to your wallet, and the Solana PDA account will be deleted.
 
-**3.** Deploy the Twitter dApp on the Solana Devnet.
+## 🧪 Testing
 
-**4.** Using the create solana dapp template, implement frontend for the Twitter dApp.
+Comprehensive test suite with **22 test scenarios** covering:
+- Project lifecycle management
+- Multi-donor functionality
+- Security validations
+- Refund system operations
+- Authorization controls
 
-**5.** Publish Frontend using [Vercel](https://vercel.com). Ensure the deployment is publicly accessible.
+```bash
+cd fundingme_dapp
+anchor test  # Run all tests
+```
 
-**6.** Fill out the PROJECT_DESCRIPTION.md template.
+## 📁 Project Structure
 
-**7.** Submit the Twitter dApp using GitHub Classroom.
+```
+program-mcamera/
+├── fundingme_dapp/          # Solana program (Rust/Anchor)
+│   ├── programs/            # Program source code
+│   ├── tests/              # Test suite (22 scenarios)
+│   └── target/             # Built artifacts and IDL
+├── fundingme_frontend/      # Frontend application (Next.js)
+│   ├── src/                # React components and logic
+│   └── public/             # Static assets
+└── PROJECT_DESCRIPTION.md  # Complete technical documentation
+```
 
-### Useful Links
-- [Vercel](https://vercel.com)
-- [Create Solana Dapp](https://github.com/solana-foundation/create-solana-dapp)
-- [Account Macro Constraints](https://docs.rs/anchor-lang/0.31.1/anchor_lang/derive.Accounts.html)
-- [Solana Developers Courses](https://solana.com/developers/courses)
+## 🛠 Tech Stack
 
------
+**Backend:**
+- Rust with Anchor Framework
+- Solana blockchain (DevNet)
+- Program Derived Addresses (PDAs)
 
-### Need help?
->[!TIP]
->If you have any questions, feel free to reach out to us on [Discord](https://discord.gg/z3JVuZyFnp).
+**Frontend:**
+- Next.js 15 with TypeScript
+- Tailwind CSS + Shadcn UI
+- Solana Wallet Adapters
+- Anchor client integration
+
+## 🔗 Links
+
+- **[Frontend Repository](./fundingme_frontend/)** - Next.js dApp interface
+- **[Solana Program](./fundingme_dapp/)** - Rust/Anchor backend
+- **[Complete Documentation](./PROJECT_DESCRIPTION.md)** - Detailed technical specs
+- **[Live Demo](https://funding-me-rho.vercel.app/)** - Deployed application
+
+## 📝 Development Notes
+
+This represents a first-time Solana development project with a focus on learning core concepts including PDAs, account management, and comprehensive testing. The implementation prioritizes functionality and security while acknowledging areas for optimization as Solana expertise grows.
+
+**Key Learning Areas:**
+- Solana account model and PDA patterns
+- Anchor framework and constraint validation
+- Multi-user state management
+- Transaction handling and error management
